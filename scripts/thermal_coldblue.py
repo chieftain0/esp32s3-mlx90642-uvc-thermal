@@ -1,8 +1,7 @@
-
 import cv2
 
 DEVICE = "/dev/video4"
-UPSCALE = 20
+UPSCALE = 40
 
 cap = cv2.VideoCapture(DEVICE, cv2.CAP_V4L2)
 
