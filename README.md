@@ -5,3 +5,7 @@ My first project in ESP-IDF. An ESP32-S3 thermal UVC camera using the MLX90642 i
 | 8-bit Grayscale Image | False-Color Image |
 | :---: | :---: |
 | ![cold blue](pics/readme_bw.jpg) | ![cold blue](pics/readme_coldblue.jpg) |
+
+## Credits
+
+[MLX90642 Driver by Melexis](https://github.com/melexis/mlx90642-library)
