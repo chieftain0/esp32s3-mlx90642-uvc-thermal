@@ -29,7 +29,7 @@ while True:
         interpolation=cv2.INTER_CUBIC
     )
 
-    cv2.imshow("Thermal Camera - 20x Upscaled", upscaled)
+    cv2.imshow("Thermal Camera - 40x Upscaled", upscaled)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
