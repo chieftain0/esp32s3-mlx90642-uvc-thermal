@@ -1,4 +1,3 @@
-#include <stdio.h>
 #include <stdint.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -20,8 +19,10 @@
 #define SENSOR_PIXEL_COUNT (SENSOR_WIDTH * SENSOR_HEIGHT)
 #define JPEG_BUF_SIZE (8 * 1024) // 8 KiB to be safe
 
-static int16_t image_buf[SENSOR_PIXEL_COUNT];
-static uint8_t gray_image_buf[SENSOR_PIXEL_COUNT];
+static volatile uint8_t camera_enabled = 0;
+
+static int16_t image_buf[SENSOR_PIXEL_COUNT] = {0};
+static uint8_t gray_image_buf[SENSOR_PIXEL_COUNT] = {0};
 
 static uint8_t jpeg_buf[JPEG_BUF_SIZE];
 static int jpeg_frame_length = 0;
@@ -29,13 +30,12 @@ static uint8_t uvc_xfer_buf[JPEG_BUF_SIZE];
 
 static uvc_fb_t uvc_fb;
 static SemaphoreHandle_t frame_buffer_mutex;
-static SemaphoreHandle_t frame_ready_sem;
 
 static jpeg_enc_handle_t jpeg = NULL;
 
 static const char *TAG_MAIN = "main.c";
 
-int gray16to8(int16_t *data_in, uint8_t *data_out, uint32_t data_len)
+static int gray16to8(int16_t *data_in, uint8_t *data_out, uint32_t data_len)
 {
     if (data_in == NULL || data_out == NULL)
     {
@@ -45,7 +45,7 @@ int gray16to8(int16_t *data_in, uint8_t *data_out, uint32_t data_len)
     int32_t max = INT16_MIN;
     int32_t min = INT16_MAX;
 
-    for (int16_t i = 0; i < data_len; i++)
+    for (int32_t i = 0; i < data_len; i++)
     {
         if (data_in[i] > max)
         {
@@ -71,7 +71,7 @@ int gray16to8(int16_t *data_in, uint8_t *data_out, uint32_t data_len)
     return 0;
 }
 
-int thermal_init()
+static int thermal_init()
 {
     int status;
 
@@ -125,18 +125,19 @@ int thermal_init()
 
 static esp_err_t cam_start_cb(uvc_format_t format, int width, int height, int rate, void *ctx)
 {
+    camera_enabled = 1;
     ESP_LOGI(TAG_MAIN, "UVC start: %dx%d @ %d fps", width, height, rate);
     return ESP_OK;
 }
 
 static void cam_stop_cb(void *ctx)
 {
+    camera_enabled = 0;
     ESP_LOGI(TAG_MAIN, "UVC stop");
 }
 
 static uvc_fb_t *cam_fb_get_cb(void *ctx)
 {
-    xSemaphoreTake(frame_ready_sem, portMAX_DELAY);    // wait for a new thermal frame
     xSemaphoreTake(frame_buffer_mutex, portMAX_DELAY); // hold until driver returns the fb
 
     struct timeval tv;
@@ -160,6 +161,12 @@ static void thermal_task(void *arg)
 {
     while (true)
     {
+        if (!camera_enabled)
+        {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
         int ready = MLX90642_IsReadWindowOpen(SA_90642_DEFAULT);
 
         if (ready == MLX90642_YES)
@@ -181,12 +188,11 @@ static void thermal_task(void *arg)
 
             xSemaphoreTake(frame_buffer_mutex, portMAX_DELAY);
 
-            int out_len = 0;
+            jpeg_error_t status = jpeg_enc_process(jpeg, gray_image_buf, SENSOR_PIXEL_COUNT, jpeg_buf, sizeof(jpeg_buf), &jpeg_frame_length);
 
-            if (jpeg_enc_process(jpeg, gray_image_buf, SENSOR_PIXEL_COUNT, jpeg_buf, JPEG_BUF_SIZE, &out_len) == JPEG_ERR_OK)
+            if (status != JPEG_ERR_OK)
             {
-                jpeg_frame_length = out_len;
-                xSemaphoreGive(frame_ready_sem);
+                ESP_LOGW(TAG_MAIN, "JPEG encoding failed: %d", status);
             }
 
             xSemaphoreGive(frame_buffer_mutex);
@@ -227,8 +233,19 @@ void app_main(void)
         return;
     }
 
+    if (jpeg_enc_process(jpeg, gray_image_buf, SENSOR_PIXEL_COUNT, jpeg_buf, sizeof(jpeg_buf), &jpeg_frame_length) != JPEG_ERR_OK)
+    {
+        ESP_LOGE(TAG_MAIN, "Initial JPEG frame generation failed");
+        return;
+    }
+
     frame_buffer_mutex = xSemaphoreCreateMutex();
-    frame_ready_sem = xSemaphoreCreateBinary();
+
+    if (frame_buffer_mutex == NULL)
+    {
+        ESP_LOGE(TAG_MAIN, "Failed to create frame buffer mutex");
+        return;
+    }
 
     uvc_device_config_t uvc_cfg = {
         .uvc_buffer = uvc_xfer_buf,
@@ -247,9 +264,8 @@ void app_main(void)
     if (thermal_task_result != pdPASS)
     {
         ESP_LOGE(TAG_MAIN, "Failed to create thermal task");
+        esp_restart();
     }
 
-    while (true)
-    {
-    }
+    vTaskDelete(NULL);
 }
