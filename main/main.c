@@ -92,34 +92,45 @@ static int thermal_init()
     status = MLX90642_I2Cinit(0, SA_90642_DEFAULT, SDA, SCL, i2c_speed, 0);
     if (status != 0)
     {
+        ESP_LOGE(TAG_MAIN, "I2C Init Failure");
         return status;
     }
     status = MLX90642_SetMeasMode(SA_90642_DEFAULT, MLX90642_CONT_MEAS_MODE);
     if (status != 0)
     {
+        ESP_LOGE(TAG_MAIN, "Thermal Set MEAS Failure");
         return status;
     }
     status = MLX90642_SetOutputFormat(SA_90642_DEFAULT, MLX90642_NORMALIZED_DATA_OUTPUT);
     if (status != 0)
     {
+        ESP_LOGE(TAG_MAIN, "Thermal Set Output Format Failure");
         return status;
     }
     status = MLX90642_SetRefreshRate(SA_90642_DEFAULT, thermal_refresh_rate);
     if (status != 0)
     {
+        ESP_LOGE(TAG_MAIN, "Thermal Set Refresh Rate Failure");
         return status;
     }
     status = MLX90642_SetI2CMode(SA_90642_DEFAULT, mlx90642_i2c_mode);
     if (status != 0)
     {
+        ESP_LOGE(TAG_MAIN, "Set I2C Mode Failure");
         return status;
     }
     status = MLX90642_GetDefect(SA_90642_DEFAULT);
     if (status != 0)
     {
+        ESP_LOGE(TAG_MAIN, "Thermal Get Defect Failure");
         return status;
     }
     status = MLX90642_Init(SA_90642_DEFAULT);
+    if (status != 0)
+    {
+        ESP_LOGE(TAG_MAIN, "Thermal Start Failure");
+        return status;
+    }
     return status;
 }
 

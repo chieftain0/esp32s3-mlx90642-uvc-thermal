@@ -1,5 +1,6 @@
 .vscode
 dependencies.lock
+.clangd
 
 # macOS
 .DS_Store
