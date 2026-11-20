@@ -213,6 +213,7 @@ static void thermal_task(void *arg)
             if (MLX90642_GetImage(SA_90642_DEFAULT, (uint16_t *)image_buf) != 0)
             {
                 ESP_LOGW(TAG_MAIN, "Thermal Image Acq Failure");
+                MLX90642_Wait_ms(3);
                 continue;
             }
 
@@ -248,12 +249,12 @@ static void thermal_task(void *arg)
         }
         else if (ready == MLX90642_NO)
         {
-            MLX90642_Wait_ms(3);
+            MLX90642_Wait_ms(5);
         }
         else
         {
             ESP_LOGW(TAG_MAIN, "Read Window Failure");
-            vTaskDelay(pdMS_TO_TICKS(3));
+            MLX90642_Wait_ms(3);
         }
     }
 }

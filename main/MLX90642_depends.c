@@ -6,6 +6,8 @@ static i2c_master_bus_handle_t mlx90642_master_bus_handle;
 static i2c_device_config_t mlx90642_device_config;
 static i2c_master_dev_handle_t mlx90642_device_handle;
 static bool i2c_established = false;
+static uint8_t sda_pin;
+static uint8_t scl_pin;
 
 static const char *TAG_MLX90642 = "MLX90642_depends.c";
 
@@ -16,11 +18,14 @@ int MLX90642_I2Cinit(uint8_t i2c_port, uint8_t addr, uint8_t sda, uint8_t scl, u
     ESP_LOGI(TAG_MLX90642, "Initializing I2C: port=%d, address=0x%02X, SDA=%d, SCL=%d, frequency=%lu Hz",
              i2c_port, addr, sda, scl, (unsigned long)freq);
 
+    sda_pin = sda;
+    scl_pin = scl;
+
     mlx90642_master_bus_config = (i2c_master_bus_config_t){
         .clk_source = I2C_CLK_SRC_DEFAULT,
         .i2c_port = i2c_port,
-        .scl_io_num = scl,
-        .sda_io_num = sda,
+        .scl_io_num = scl_pin,
+        .sda_io_num = sda_pin,
         .glitch_ignore_cnt = 7,
         .flags.enable_internal_pullup = int_pllup,
     };
@@ -245,8 +250,8 @@ int MLX90642_GetDefect(uint8_t slaveAddr)
  * @param[in] data Pointer to the image data.
  *
  * @return 0 on success, -1 if the data pointer is NULL.
- * 
- * 
+ *
+ *
  */
 int MLX90642_DefectCompensate(int16_t *data)
 {
