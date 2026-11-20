@@ -213,7 +213,6 @@ static void thermal_task(void *arg)
             if (MLX90642_GetImage(SA_90642_DEFAULT, (uint16_t *)image_buf) != 0)
             {
                 ESP_LOGW(TAG_MAIN, "Thermal Image Acq Failure");
-                MLX90642_Wait_ms(3);
                 continue;
             }
 
