@@ -1,10 +1,15 @@
+/*
+To use JPEG, comment out the CONFIG_FORMAT_UNCOMPR_CAM1=y line
+in the skdconfig.defaults file and uncomment the respective MJEG line.
+Delete sdkconfig file, full clean and rebuild the project.
+*/
+
 #include <stdint.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include "usb_device_uvc.h"
-#include "esp_jpeg_enc.h"
 
 #include <MLX90642_depends.h>
 #include <MLX90642.h>
@@ -17,27 +22,33 @@
 #define SENSOR_WIDTH 32
 #define SENSOR_HEIGHT 24
 #define SENSOR_PIXEL_COUNT (SENSOR_WIDTH * SENSOR_HEIGHT)
-#define JPEG_BUF_SIZE (8 * 1024) // 8 KiB to be safe
 
 static volatile uint8_t camera_enabled = 0;
 
 static int16_t image_buf[SENSOR_PIXEL_COUNT] = {0};
 static uint8_t gray_image_buf[SENSOR_PIXEL_COUNT] = {0};
 
-static uint8_t jpeg_buf[JPEG_BUF_SIZE];
-static int jpeg_frame_length = 0;
+#ifndef CONFIG_FORMAT_UNCOMPR_CAM1
+#include "esp_jpeg_enc.h"
+#define JPEG_BUF_SIZE (8 * 1024) // 8 KiB to be safe
+static uint8_t uvc_frame_buf[JPEG_BUF_SIZE];
+static int uvc_frame_buf_length = 0;
 static uint8_t uvc_xfer_buf[JPEG_BUF_SIZE];
+static jpeg_enc_handle_t jpeg = NULL;
+#else
+static uint8_t uvc_frame_buf[SENSOR_PIXEL_COUNT * 2];
+static int uvc_frame_buf_length = SENSOR_PIXEL_COUNT * 2;
+static uint8_t uvc_xfer_buf[SENSOR_PIXEL_COUNT * 2];
+#endif
 
 static uvc_fb_t uvc_fb;
 static SemaphoreHandle_t frame_buffer_mutex;
 
-static jpeg_enc_handle_t jpeg = NULL;
-
 static const char *TAG_MAIN = "main.c";
 
-static int gray16to8(int16_t *data_in, uint8_t *data_out, uint32_t data_len)
+static int gray16_to_gray8(int16_t *data_in, uint8_t *data_out, int32_t data_in_len)
 {
-    if (data_in == NULL || data_out == NULL)
+    if (data_in == NULL || data_out == NULL || data_in_len <= 0)
     {
         return -1;
     }
@@ -45,7 +56,7 @@ static int gray16to8(int16_t *data_in, uint8_t *data_out, uint32_t data_len)
     int32_t max = INT16_MIN;
     int32_t min = INT16_MAX;
 
-    for (int32_t i = 0; i < data_len; i++)
+    for (int32_t i = 0; i < data_in_len; i++)
     {
         if (data_in[i] > max)
         {
@@ -63,9 +74,25 @@ static int gray16to8(int16_t *data_in, uint8_t *data_out, uint32_t data_len)
         range = 1;
     }
 
-    for (uint32_t i = 0; i < data_len; i++)
+    for (uint32_t i = 0; i < data_in_len; i++)
     {
         data_out[i] = (uint8_t)((uint32_t)((data_in[i] - min) * 0xFF) / range);
+    }
+
+    return 0;
+}
+
+static int gray8_to_yuy2(uint8_t *data_in, uint8_t *data_out, int32_t data_in_len)
+{
+    if (data_in == NULL || data_out == NULL || data_in_len <= 0)
+    {
+        return -1;
+    }
+
+    for (uint32_t i = 0; i < data_in_len; i++)
+    {
+        data_out[2 * i] = data_in[i];
+        data_out[2 * i + 1] = (uint8_t)128;
     }
 
     return 0;
@@ -154,8 +181,8 @@ static uvc_fb_t *cam_fb_get_cb(void *ctx)
     struct timeval tv;
     gettimeofday(&tv, NULL);
 
-    uvc_fb.buf = jpeg_buf;
-    uvc_fb.len = jpeg_frame_length;
+    uvc_fb.buf = uvc_frame_buf;
+    uvc_fb.len = uvc_frame_buf_length;
     uvc_fb.width = SENSOR_WIDTH;
     uvc_fb.height = SENSOR_HEIGHT;
     uvc_fb.format = UVC_FORMAT_JPEG;
@@ -195,16 +222,27 @@ static void thermal_task(void *arg)
                 continue;
             }
 
-            gray16to8(image_buf, gray_image_buf, SENSOR_PIXEL_COUNT);
+            if (gray16_to_gray8(image_buf, gray_image_buf, SENSOR_PIXEL_COUNT) != 0)
+            {
+                ESP_LOGW(TAG_MAIN, "Grayscale conversion failed");
+                continue;
+            }
 
             xSemaphoreTake(frame_buffer_mutex, portMAX_DELAY);
 
-            jpeg_error_t status = jpeg_enc_process(jpeg, gray_image_buf, SENSOR_PIXEL_COUNT, jpeg_buf, sizeof(jpeg_buf), &jpeg_frame_length);
-
+#ifndef CONFIG_FORMAT_UNCOMPR_CAM1
+            jpeg_error_t status = jpeg_enc_process(jpeg, gray_image_buf, SENSOR_PIXEL_COUNT, uvc_frame_buf, sizeof(uvc_frame_buf), &uvc_frame_buf_length);
             if (status != JPEG_ERR_OK)
             {
                 ESP_LOGW(TAG_MAIN, "JPEG encoding failed: %d", status);
             }
+#else
+            int status = gray8_to_yuy2(gray_image_buf, uvc_frame_buf, sizeof(gray_image_buf));
+            if (status != 0)
+            {
+                ESP_LOGW(TAG_MAIN, "YUY2 Encoding Failed");
+            }
+#endif
 
             xSemaphoreGive(frame_buffer_mutex);
         }
@@ -232,6 +270,7 @@ void app_main(void)
         esp_restart();
     }
 
+#ifndef CONFIG_FORMAT_UNCOMPR_CAM1
     jpeg_enc_config_t enc_cfg = DEFAULT_JPEG_ENC_CONFIG();
     enc_cfg.width = SENSOR_WIDTH;
     enc_cfg.height = SENSOR_HEIGHT;
@@ -244,11 +283,18 @@ void app_main(void)
         return;
     }
 
-    if (jpeg_enc_process(jpeg, gray_image_buf, SENSOR_PIXEL_COUNT, jpeg_buf, sizeof(jpeg_buf), &jpeg_frame_length) != JPEG_ERR_OK)
+    if (jpeg_enc_process(jpeg, gray_image_buf, SENSOR_PIXEL_COUNT, uvc_frame_buf, sizeof(uvc_frame_buf), &uvc_frame_buf_length) != JPEG_ERR_OK)
     {
         ESP_LOGE(TAG_MAIN, "Initial JPEG frame generation failed");
         return;
     }
+#else
+    int status = gray8_to_yuy2(gray_image_buf, uvc_frame_buf, sizeof(gray_image_buf));
+    if (status != 0)
+    {
+        ESP_LOGW(TAG_MAIN, "Initial YUY2 frame generation failed");
+    }
+#endif
 
     frame_buffer_mutex = xSemaphoreCreateMutex();
 
